@@ -130,6 +130,7 @@ def circadian_metrics(raw_df, csv_path,
     # Interdaily staubility (IS)
     interdaily_stability_value, interdaily_stability_mean = np.nan, np.nan
     raw_for_IS = raw_for_IS.sort_values('Datetime')
+                      
     if not raw_for_IS.empty:
         hourly_data = raw_for_IS.set_index('Datetime')['Activity'].resample('1h').agg(['mean', 'count'])
         valid_hours = hourly_data[hourly_data['count'] > 0].copy()
@@ -182,7 +183,7 @@ def circadian_metrics(raw_df, csv_path,
 # 'Sleep' metrics. Also runs the circadian. ?should prpbably separate these to enable easier calculation where rest period not determined?
 def sleep_metrics(csv, days_to_remove=0, trim_start=True, trim_end=True, **circadian_params):
     
-    ## Load data, handles the Actiware header (for other data will need to adapt this)
+    ## Load data, handles the Actiware header (for other data this will need adapting)
     try:
         rawest = pd.read_csv(csv, sep='an_unlikely_separator', names=['Column'], engine='python', on_bad_lines='skip')
         line_series = rawest['Column'].str.contains('"Line",', na=False)
@@ -239,6 +240,7 @@ def sleep_metrics(csv, days_to_remove=0, trim_start=True, trim_end=True, **circa
     
     # Calculate circadian metrics
     circadian_results_df = None
+ 
     if not raw.empty:
         circadian_results_df = circadian_metrics(raw_df=raw, csv_path=csv, **circadian_params)
     if raw.empty or 'Interval Status' not in raw.columns:
@@ -310,6 +312,7 @@ def sleep_metrics(csv, days_to_remove=0, trim_start=True, trim_end=True, **circa
     ## Calculate sleep metrics
     TIB_avg, Input_SE, Input_TST_avg, Input_WASO_avg = [np.nan] * 4
     Sadeh_SE, Cole_SE, Actiware_20_SE, Actiware_40_SE, Actiware_80_SE = [np.nan] * 5
+ 
     if rest_periods > 0 and TIB > 0:
         TIB_avg = TIB / 2.0 / rest_periods
         Input_SE = 100.0 / TIB * Input_TST
@@ -340,10 +343,13 @@ def sleep_metrics(csv, days_to_remove=0, trim_start=True, trim_end=True, **circa
     Midpoint_sleep_mins_Mean = circadian_results['midpoint_sleep_mins_from_midnight'].mean()
     
     sleep_onset_latency = np.nan
+ 
     if len(rest_start_times) > 0 and len(rest_start_times) == len(sleep_start_times):
         latencies = (sleep_start_times - rest_start_times).dt.total_seconds() / 60
         sleep_onset_latency = latencies[latencies >= 0].mean()
+     
     first_day = pd.to_datetime(raw.loc[0, 'Date'], dayfirst=True).strftime('%A') if not raw.empty else 'N/A'
+ 
     s1 = pd.DataFrame([[
         filename, rest_periods, TIB_avg, Input_TST_avg, Input_SE, Input_WASO_avg,
         Sadeh_SE, Cole_SE, Actiware_20_SE, Actiware_40_SE, Actiware_80_SE,
@@ -430,7 +436,7 @@ def SleePy(
 
 
 
-### Example, to run
+### Example, to run:
 
 # SleePy(input_folder='./example_data/', 
 #        days_to_remove=1
