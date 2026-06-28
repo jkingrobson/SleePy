@@ -4,7 +4,7 @@
 
 
 """
-SleePy v2.2
+SleePy v2.3
 A python program for the analysis of sleep and circadian metrics with automated management of missing data
 Author: Josh King-Robson (j.king-robson@ucl.ac.uk)
 """
@@ -32,11 +32,11 @@ def circadian_metrics(raw_df, csv_path,
                       is_imputation=None, is_fallback=None,
                       iv_imputation='median', iv_fallback=None,
                       m16l8_time_imputation='mean', m16l8_time_fallback=None,
+                      m_duration=16, l_duration=8
                      ):
     
     #Calculator for circadian metrics, includes imputation for missing data as per above defaults. 
-
-                    
+    
     # Create datetime; IF using non actiware (?UK_) format, please examine output carefully to check this works. 
     # The Actiware date input is inconsistent; this manages that, and is hopefully robust enough to manage other data. 
     raw = raw_df.copy()
@@ -52,9 +52,9 @@ def circadian_metrics(raw_df, csv_path,
         raw['Interval Status'] = raw['Interval Status'].astype(str).str.upper()
 
 
+
                       
-    # Impuation steps. 
-                      
+    # Impuation steps.  
     def impute_missing_data(df, imputation_method, fallback_value):
         df_processed = df.copy()
         if imputation_method and 'Interval Status' in df.columns:
@@ -80,9 +80,9 @@ def circadian_metrics(raw_df, csv_path,
     raw_for_M16L8 = impute_missing_data(raw, m16l8_time_imputation, m16l8_time_fallback)
 
 
+
                       
     # L5 and M10
-                      
     def compute_mean_profile(df):
         df_proc = df.dropna(subset=["Datetime", "Activity"]).copy()
         if df_proc.empty:
@@ -94,8 +94,7 @@ def circadian_metrics(raw_df, csv_path,
         mean_profile_interp = mean_profile.reindex(target_index).interpolate(method="linear", limit_direction="both")
         mean_profile_interp.index.name = "minutes"
         return mean_profile_interp
-
-                      
+        
     average_day_L5 = compute_mean_profile(raw_for_L5)
     average_day_M10 = compute_mean_profile(raw_for_M10)
     base_index = pd.to_datetime("2000-01-01") + pd.to_timedelta(average_day_L5.index, unit="m")
@@ -105,8 +104,9 @@ def circadian_metrics(raw_df, csv_path,
     roll_M10 = doubled_M10.rolling(window=int(round(10*60/0.5)), center=True, min_periods=1).mean()
 
 
+
                       
-    ## This was needed due to rare 'tied' results, where just i.e. dividing by 2 to find average can cause bizarre times. 
+    ## This was needed due to rare 'tied' results, where just i.e. dividing by 2 to find average can cause bizarre/erratic times. 
     def pick_central_time_of_ties(series_48h, is_max=False):
         if series_48h.empty or not series_48h.notna().any(): return pd.NaT, np.nan
         series_min, series_max = series_48h.min(), series_48h.max()
@@ -122,31 +122,29 @@ def circadian_metrics(raw_df, csv_path,
         
     L5_midpoint_time, L5_mean = pick_central_time_of_ties(roll_L5, is_max=False)
     M10_midpoint_time, M10_mean = pick_central_time_of_ties(roll_M10, is_max=True)
-
-                      
+    
     def time_to_minutes_phase_corrected_L(time):
         if pd.isna(time): return np.nan
         m = (time - time.normalize()).total_seconds() / 60.0
         return m - 1440 if m >= 720 else m
-
-                      
+        
     def time_to_minutes_phase_corrected_M(time):
         if pd.isna(time): return np.nan
         m = ((time - time.normalize()).total_seconds() / 60.0) - 720
         return m + 1440 if m <= -720 else m
-
-                      
+        
     L5_midpoint_mins = time_to_minutes_phase_corrected_L(L5_midpoint_time)
     M10_midpoint_mins = time_to_minutes_phase_corrected_M(M10_midpoint_time)
+
+    
     relative_amplitude = (M10_mean - L5_mean) / (M10_mean + L5_mean) if (M10_mean + L5_mean) > 0 else np.nan
+
 
 
                       
     # Interdaily staubility (IS)
-                      
     interdaily_stability_value, interdaily_stability_mean = np.nan, np.nan
     raw_for_IS = raw_for_IS.sort_values('Datetime')
-                      
     if not raw_for_IS.empty:
         hourly_data = raw_for_IS.set_index('Datetime')['Activity'].resample('1h').agg(['mean', 'count'])
         valid_hours = hourly_data[hourly_data['count'] > 0].copy()
@@ -160,9 +158,9 @@ def circadian_metrics(raw_df, csv_path,
             if variance_total > 0: interdaily_stability_value = variance_hourly / variance_total
 
 
+
                       
     # Intradaily variability (IV)
-                      
     hourly_activity_iv = raw_for_IV.groupby(np.arange(len(raw_for_IV)) // 120)['Activity'].mean()
     overall_mean_iv = raw_for_IV['Activity'].mean()
     sum_of_variance = ((hourly_activity_iv - overall_mean_iv) ** 2).sum()
@@ -171,15 +169,22 @@ def circadian_metrics(raw_df, csv_path,
 
 
                       
-    # M16/L8 (for the period/window calculations)
-                      
-    average_m16l8_profile = compute_mean_profile(raw_for_M16L8)
-    base_index_m16 = pd.to_datetime("2000-01-01") + pd.to_timedelta(average_m16l8_profile.index, unit="m")
-    doubled_m16_profile = pd.concat([pd.Series(average_m16l8_profile.values, index=base_index_m16), pd.Series(average_m16l8_profile.values, index=base_index_m16 + pd.Timedelta(days=1))])
-    m16_rolling_mean = doubled_m16_profile.rolling(window=int(16*60/0.5), center=True, min_periods=1).mean().loc[base_index_m16]
-    l8_rolling_mean = doubled_m16_profile.rolling(window=int(8*60/0.5), center=True, min_periods=1).mean().loc[base_index_m16]
-    m16_score_max, m16_peak_time = (m16_rolling_mean.max(), m16_rolling_mean.idxmax()) if not m16_rolling_mean.empty else (np.nan, pd.NaT)
-    l8_score_min, l8_trough_time = (l8_rolling_mean.min(), l8_rolling_mean.idxmin()) if not l8_rolling_mean.empty else (np.nan, pd.NaT)
+    # M16/L8 (enables choosing other durations if interested)
+    average_ml_profile = compute_mean_profile(raw_for_M16L8)
+    base_index_ml = pd.to_datetime("2000-01-01") + pd.to_timedelta(average_ml_profile.index, unit="m")
+    tripled_ml_profile = pd.concat([pd.Series(average_ml_profile.values, index=base_index_ml - pd.Timedelta(days=1)), pd.Series(average_ml_profile.values, index=base_index_ml), pd.Series(average_ml_profile.values, index=base_index_ml + pd.Timedelta(days=1))])
+    m_roll = tripled_ml_profile.rolling(window=int(round(m_duration*60/0.5)), center=True).mean()
+    l_roll = tripled_ml_profile.rolling(window=int(round(l_duration*60/0.5)), center=True).mean()
+    m_rolling_middle = m_roll.loc[base_index_ml]
+    l_rolling_middle = l_roll.loc[base_index_ml]
+    m_peak_time, m_score_max = pick_central_time_of_ties(m_rolling_middle, is_max=True)
+    l_trough_time, l_score_min = pick_central_time_of_ties(l_rolling_middle, is_max=False)
+    
+    #Export the time
+    m_midpoint_mins = time_to_minutes_phase_corrected_M(m_peak_time)
+    l_midpoint_mins = time_to_minutes_phase_corrected_L(l_trough_time)
+    m_peak_str = m_peak_time.strftime('%H:%M') if pd.notna(m_peak_time) else "N/A"
+    l_trough_str = l_trough_time.strftime('%H:%M') if pd.notna(l_trough_time) else "N/A"
     
     def comp_is_w(raw_data, start_time, hours, global_mean):
         if pd.isna(start_time) or raw_data.empty or pd.isna(global_mean): return np.nan
@@ -193,24 +198,29 @@ def circadian_metrics(raw_df, csv_path,
         denominator_variance_subset = np.average((valid_hourly_stats['mean'] - global_mean)**2, weights=valid_hourly_stats['count'])
         hourly_means_subset = valid_hourly_stats.groupby(valid_hourly_stats.index.hour).apply(lambda group: np.average(group['mean'], weights=group['count']), include_groups=False)
         return np.average((hourly_means_subset - global_mean)**2, weights=valid_hourly_stats.groupby(valid_hourly_stats.index.hour)['count'].sum()) / denominator_variance_subset if denominator_variance_subset > 0 else np.nan
-        
-    interdaily_stability_m16 = comp_is_w(raw_for_IS, m16_peak_time - pd.Timedelta(hours=8), 16, interdaily_stability_mean)
-    interdaily_stability_l8 = comp_is_w(raw_for_IS, l8_trough_time - pd.Timedelta(hours=4), 8, interdaily_stability_mean)
+
+                      
+    # To find the midpoint
+    interdaily_stability_m = comp_is_w(raw_for_IS, m_peak_time - pd.Timedelta(hours=m_duration/2), m_duration, interdaily_stability_mean)
+    interdaily_stability_l = comp_is_w(raw_for_IS, l_trough_time - pd.Timedelta(hours=l_duration/2), l_duration, interdaily_stability_mean)
+    
     
     return pd.DataFrame([[
-        os.path.basename(csv_path).replace('.csv', ''), float(L5_mean), L5_midpoint_mins, float(M10_mean), M10_midpoint_mins, relative_amplitude, interdaily_stability_value, intradaily_variability_value, m16_score_max, l8_score_min, interdaily_stability_m16, interdaily_stability_l8
+        os.path.basename(csv_path).replace('.csv', ''), float(L5_mean), L5_midpoint_mins, float(M10_mean), M10_midpoint_mins, relative_amplitude, interdaily_stability_value, intradaily_variability_value, m_score_max, l_score_min, interdaily_stability_m, interdaily_stability_l
     ]], columns=['ID', 'L5_score_mean', 'L5_midpoint_mins_from_midnight_mean', 'M10_score_mean', 'M10_midpoint_mins_from_midnight_mean', 
-                 'relative_amplitude', 'interdaily_stability', 'intradaily_variability', 'M16_score', 'L8_score', 'IS_M16_weighted', 'IS_L8_weighted'])
+                 'relative_amplitude', 'interdaily_stability', 'intradaily_variability', 
+                 f'M{m_duration}_score', f'L{l_duration}_score', f'IS_M{m_duration}_weighted', f'IS_L{l_duration}_weighted'])
+
+
+
+
 
 
 
 # 'Sleep' metrics. Also runs the circadian. ?should prpbably separate these to enable easier calculation where rest period not determined?
-
-def sleep_metrics(csv, days_to_remove=0, trim_start=True, trim_end=True, **circadian_params):
-
-
- 
-    ## Load data, handles the Actiware header (for other data this will need adapting)
+def sleep_metrics(csv, days_to_remove=0, trim_start=False, trim_end=False, **circadian_params):
+    
+    ## Load data, handles the Actiware header (for other data will need to adapt this)
     try:
         rawest = pd.read_csv(csv, sep='an_unlikely_separator', names=['Column'], engine='python', on_bad_lines='skip')
         line_series = rawest['Column'].str.contains('"Line",', na=False)
@@ -224,33 +234,34 @@ def sleep_metrics(csv, days_to_remove=0, trim_start=True, trim_end=True, **circa
  
     ### Trim initial data. Essentially sets the start of the first 5 hour uniniterrupted (by missingness) period as
     ### the start of the data. This trims the demonstration period etc (and MRI in our participants) at the beginning of the data. 
- 
     first_nonerror_epoch = 0
     win_size = 600
     
     if trim_start and 'Interval Status' in raw.columns and len(raw) > win_size:
         is_excluded = raw['Interval Status'].str.contains('EXCLUDED', na=False)
-        rolling_sum = is_excluded.rolling(window=win_size).sum().fillna(0)
-        first_valid_window_starts = (rolling_sum == 0)
-        if first_valid_window_starts.any():
-            first_nonerror_epoch = first_valid_window_starts.idxmax()
+        rolling_sum = is_excluded.rolling(window=win_size, min_periods=win_size).sum()      
+        if (rolling_sum == 0).any():
+            first_nonerror_epoch = max(0, (rolling_sum == 0).idxmax() - win_size + 1)
+    
     raw = raw.iloc[first_nonerror_epoch:].reset_index(drop=True)
-    
+
+
+ 
+    ### Trim end data
     last_valid_epoch = len(raw)
-    
     if trim_end and 'Interval Status' in raw.columns and len(raw) > win_size:
-        is_excluded_rev = raw['Interval Status'].iloc[::-1].reset_index(drop=True).str.contains('EXCLUDED', na=False)
-        rolling_sum_rev = is_excluded_rev.rolling(window=win_size).sum().fillna(0)
-        first_valid_rev_starts = (rolling_sum_rev == 0)
-        if first_valid_rev_starts.any():
-            first_valid_rev = first_valid_rev_starts.idxmax()
-            last_valid_epoch = len(raw) - first_valid_rev
+        is_excluded = raw['Interval Status'].str.contains('EXCLUDED', na=False)
+        rolling_sum = is_excluded.rolling(window=win_size, min_periods=win_size).sum()       
+        if (rolling_sum == 0).any():
+            # finds the index of the last valid 5-hour window's end
+            last_valid_epoch = (rolling_sum == 0)[::-1].idxmax() + 1
+            
     raw = raw.iloc[:last_valid_epoch].reset_index(drop=True)
+
 
 
  
     ## Remove n days (in case of first day effects)
- 
     if days_to_remove > 0 and not raw.empty:
         try:
             first_epoch_date = raw.loc[0, 'Date']
@@ -268,25 +279,30 @@ def sleep_metrics(csv, days_to_remove=0, trim_start=True, trim_end=True, **circa
             # Trim
             raw = raw.drop(raw.index[0:int(next_midday_epochs)]).reset_index(drop=True)
         except Exception as e:
-            print(f"Could not remove days due to error: {e}") ### Only really a problem if input n strange I think
+            print(f"Could not remove days due to error: {e}") ### Only really a problem if input n strange I think, could remove
             pass
+    
+    
+    total_epochs = len(raw)
+    missing_epochs = raw['Interval Status'].astype(str).str.upper().str.contains('EXCLUDED', na=False).sum()
+    missingness_pct = (missing_epochs / total_epochs) * 100
+    valid_epochs = total_epochs - missing_epochs
+    valid_data_duration_mins = valid_epochs * 0.5    
+        
 
 
+ 
  
     # Calculate circadian metrics
- 
     circadian_results_df = None
- 
     if not raw.empty:
         circadian_results_df = circadian_metrics(raw_df=raw, csv_path=csv, **circadian_params)
     if raw.empty or 'Interval Status' not in raw.columns:
         return circadian_results_df, pd.DataFrame()
     raw['Activity'] = pd.to_numeric(raw['Activity'], errors='coerce').fillna(0)
 
-
  
     # Add columns for other sleep scoring algorithms (see refs above). Could remove these, as not very useful withoiut calibration. 
- 
     raw["Sadeh_wake"] = 0
     raw["Cole_Kripke_wake"] = 0
     raw["Actiware_wake_20"] = 0
@@ -351,10 +367,8 @@ def sleep_metrics(csv, days_to_remove=0, trim_start=True, trim_end=True, **circa
 
  
     ## Calculate sleep metrics
- 
     TIB_avg, Input_SE, Input_TST_avg, Input_WASO_avg = [np.nan] * 4
     Sadeh_SE, Cole_SE, Actiware_20_SE, Actiware_40_SE, Actiware_80_SE = [np.nan] * 5
- 
     if rest_periods > 0 and TIB > 0:
         TIB_avg = TIB / 2.0 / rest_periods
         Input_SE = 100.0 / TIB * Input_TST
@@ -369,14 +383,12 @@ def sleep_metrics(csv, days_to_remove=0, trim_start=True, trim_end=True, **circa
 
  
     #### Sleep timing
-
     total_sleep_time = (sleep_end_times - sleep_start_times).dt.total_seconds() / 60
     midpoint_sleep = sleep_start_times + pd.to_timedelta(total_sleep_time / 2, unit='m')
 
 
  
     # Midpoint_sleep_mins_Mean, uses mignight centering as per L5 etc. 
- 
     minutes_from_own_midnight = (midpoint_sleep - midpoint_sleep.dt.normalize()).dt.total_seconds() / 60.0
     
     midpoint_sleep_mins_from_midnight = minutes_from_own_midnight.apply(
@@ -391,30 +403,31 @@ def sleep_metrics(csv, days_to_remove=0, trim_start=True, trim_end=True, **circa
     Midpoint_sleep_mins_Mean = circadian_results['midpoint_sleep_mins_from_midnight'].mean()
     
     sleep_onset_latency = np.nan
- 
     if len(rest_start_times) > 0 and len(rest_start_times) == len(sleep_start_times):
         latencies = (sleep_start_times - rest_start_times).dt.total_seconds() / 60
         sleep_onset_latency = latencies[latencies >= 0].mean()
-     
     first_day = pd.to_datetime(raw.loc[0, 'Date'], dayfirst=True).strftime('%A') if not raw.empty else 'N/A'
- 
     s1 = pd.DataFrame([[
         filename, rest_periods, TIB_avg, Input_TST_avg, Input_SE, Input_WASO_avg,
         Sadeh_SE, Cole_SE, Actiware_20_SE, Actiware_40_SE, Actiware_80_SE,
         total_sleep_time_Mean, total_sleep_time_SD, 
         Midpoint_sleep_mins_Mean, Midpoint_sleep_mins_SD,
-        sleep_onset_latency, first_day
+        sleep_onset_latency, first_day, missingness_pct, valid_data_duration_mins
     ]], columns = [
         'ID', 'rest periods', 'TIB (avg)', 'Input TST (avg)', 'Input SE', 'Input WASO (avg)',
         'Sadeh SE', 'Cole-Kripke SE', 'Actiware 20 SE', 'Actiware 40 SE', 'Actiware 80 SE',
-        'total_sleep_period_time_Mean', 'total_sleep_time_SD', 
-        'Midpoint_sleep_mins_Mean', 'Midpoint_sleep_mins_SD',
-        'sleep_onset_latency', 'First_day'
+        'total_sleep_period_time_mean', 'total_sleep_time_SD', 
+        'midpoint_sleep_mins_mean', 'midpoint_sleep_mins_SD',
+        'sleep_onset_latency', 'first_day', "missingness_pct", "valid_data_duration_mins"
     ])
     if circadian_results_df is not None:
         circadian_results_to_join = circadian_results_df.drop(columns=['ID'])
         s1 = pd.concat([s1.reset_index(drop=True), circadian_results_to_join.reset_index(drop=True)], axis=1)
+        
+        
     return (s1, circadian_results)
+
+
 
 
 
@@ -432,16 +445,15 @@ def SleePy(
     m10_imputation='mean',
     is_imputation=None,
     iv_imputation='median',
-    m16l8_time_imputation='mean'
+    m16l8_time_imputation='mean',
+    m_duration=16, 
+    l_duration=8   
 ):
     
     # Output path
- 
     if output_path is None:
-        output_path = os.path.join(input_folder, "sleep_circadian_metrics_results_minusday_v2point2.csv")
-     
+        output_path = os.path.join(input_folder, "SleePy_results.csv")
     # Find the files
- 
     csv_pattern = os.path.join(input_folder, "*.csv")
     csv_files = glob.glob(csv_pattern)
     
@@ -456,7 +468,6 @@ def SleePy(
         print(f"Processing: {file_name}...")
         
         try:
-            # Pass the new trim variables down to sleep_metrics
             s1, _ = sleep_metrics(
                 file_path, 
                 days_to_remove=days_to_remove,
@@ -466,7 +477,9 @@ def SleePy(
                 m10_imputation=m10_imputation,
                 is_imputation=is_imputation,
                 iv_imputation=iv_imputation, 
-                m16l8_time_imputation=m16l8_time_imputation
+                m16l8_time_imputation=m16l8_time_imputation,
+                m_duration=m_duration, 
+                l_duration=l_duration  
             )
             
             if s1 is not None:
@@ -475,11 +488,7 @@ def SleePy(
                 
         except Exception as e:
             print(f"  FAILED to process {file_name}. Error: {e}")
-
-
- 
-    # Save them all
- 
+    # 3. Save them all
     if all_results:
         final_df = pd.concat(all_results, sort=False)
         final_df.to_csv(output_path)
@@ -490,7 +499,6 @@ def SleePy(
         print("Likely culprits include date/time formatting, and requirement for data column names as per Actiware output data")
         print("SleePy currently requires data in 30 second epochs")
         print("See documentation and example input data file to understand data requirements.") 
-
 
 
 
