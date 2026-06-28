@@ -2,7 +2,7 @@
 
 **Author:** Josh King-Robson, University College London
 
-**Version:** 2.2
+**Version:** 2.3
 
 **Description:** Python package for actigraphy data analysis. *SleePy* will calculate a range of parametric and non-parametric sleep and circadian metrics from actigraphy data. It enables automated management of missing data, and automatic removal of the first *n* days, i.e. where there are concerns of 'first day' effects. *SleePy* was designed to work with data exported from Philips Actiware but with minimal adaptation will work with other time series data.
 
